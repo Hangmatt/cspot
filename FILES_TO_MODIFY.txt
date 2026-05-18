@@ -1,0 +1,206 @@
+═══════════════════════════════════════════════════════════════════════════════
+ESP-IDF v6.0 MIGRATION: FILES REQUIRING CHANGES
+═══════════════════════════════════════════════════════════════════════════════
+
+CRITICAL FILES (Fix First - I2S Driver Update)
+═══════════════════════════════════════════════════════════════════════════════
+
+1. cspot/bell/main/audio-sinks/esp/InternalAudioSink.cpp
+   Changes Needed:
+   - Replace: #include "driver/i2s.h" → #include "driver/i2s_std.h"
+   - Update: i2s_config_t → i2s_chan_config_t + i2s_std_config_t
+   - Update: i2s_driver_install() → i2s_new_std_tx_channel()
+   - Update: i2s_set_pin() → gpio_cfg in std_config
+   - Update: i2s_write() → i2s_channel_write()
+   - Update: i2s_set_dac_mode() → Remove (DAC mode no longer supported)
+   Priority: 🔴 CRITICAL (Audio will not work without this)
+   Effort: 1-1.5 hours
+   Note: Consider refactoring to external DAC
+
+2. cspot/bell/main/audio-sinks/esp/BufferedAudioSink.cpp
+   Changes Needed:
+   - Replace: #include "driver/i2s.h" → #include "driver/i2s_std.h"
+   - Update: i2s_config_t → i2s_chan_config_t + i2s_std_config_t
+   - Update: i2s_driver_install() → i2s_new_std_tx_channel()
+   - Update: i2s_write() → i2s_channel_write()
+   - Update: i2s_set_clk() → i2s_channel_reconfig_clk()
+   - Update: i2s_driver_uninstall() → i2s_channel_disable() + i2s_del_channel()
+   Priority: 🔴 CRITICAL (Base class for audio sinks)
+   Effort: 1-1.5 hours
+
+3. cspot/bell/main/audio-sinks/esp/ES8311AudioSink.cpp
+   Changes Needed:
+   - Replace: #include "driver/i2s.h" → #include "driver/i2s_std.h"
+   - Update: i2s_config_t → i2s_chan_config_t + i2s_std_config_t
+   - Update: i2s_driver_install() → i2s_new_std_tx_channel()
+   - Update: i2s_set_pin() → gpio_cfg in std_config
+   Priority: 🔴 CRITICAL (Common external DAC)
+   Effort: 30-45 min
+   Reference: See I2S_MIGRATION_CODE_EXAMPLES.md for ES8311 example
+
+4. cspot/bell/main/audio-sinks/esp/ES8388AudioSink.cpp
+   Changes Needed: Same as ES8311
+   Priority: 🔴 CRITICAL
+   Effort: 30-45 min
+
+5. cspot/bell/main/audio-sinks/esp/AC101AudioSink.cpp
+   Changes Needed: Same as ES8311
+   Priority: 🔴 CRITICAL
+   Effort: 30-45 min
+
+6. cspot/bell/main/audio-sinks/esp/PCM5102AudioSink.cpp
+   Changes Needed: Same as ES8311
+   Priority: 🔴 CRITICAL
+   Effort: 30-45 min
+
+7. cspot/bell/main/audio-sinks/esp/ES9018AudioSink.cpp
+   Changes Needed: Same as ES8311
+   Priority: 🔴 CRITICAL
+   Effort: 30-45 min
+
+8. cspot/bell/main/audio-sinks/esp/SPDIFAudioSink.cpp
+   Changes Needed: Same as ES8311
+   Priority: 🔴 CRITICAL
+   Effort: 30-45 min
+
+═══════════════════════════════════════════════════════════════════════════════
+
+BUILD CONFIGURATION FILES (Fix Second)
+═══════════════════════════════════════════════════════════════════════════════
+
+9. targets/esp32/CMakeLists.txt
+   Changes Needed:
+   - In list(APPEND EXTRA_COMPONENT_DIRS ...) section
+   - Add: esp_driver_i2s
+   - Add: esp_driver_gpio (if not already there)
+   - Add: esp_driver_dma
+   Priority: 🟡 HIGH (Build will fail without this)
+   Effort: 5 min
+
+10. cspot/bell/main/CMakeLists.txt (or relevant component CMakeLists.txt)
+    Changes Needed:
+    - In idf_component_register() REQUIRES section:
+    - Add: esp_driver_i2s
+    - Add: esp_driver_gpio (if not already there)
+    - Add: esp_driver_dma (if using DMA)
+    Priority: 🟡 HIGH (Build will fail without this)
+    Effort: 5 min
+
+═══════════════════════════════════════════════════════════════════════════════
+
+MAIN APPLICATION FILES (Fix Third - Infrastructure)
+═══════════════════════════════════════════════════════════════════════════════
+
+11. targets/esp32/main/main.cpp
+    Changes Needed:
+    - Add: #include "psa/crypto.h" at top
+    - In app_main(): Add psa_crypto_init() call EARLY (before Wi-Fi init)
+    - Update: Wi-Fi initialization check:
+      OLD: esp_wifi_init(&cfg);
+      NEW: if (esp_wifi_get_init_status() == false) { esp_wifi_init(&cfg); }
+    - Check for: #include <sys/dirent.h> → Replace with #include <dirent.h>
+    Priority: 🟡 HIGH (PSA crypto required for HTTPS, WiFi re-init handling)
+    Effort: 30 min
+
+═══════════════════════════════════════════════════════════════════════════════
+
+OPTIONAL / LOWER PRIORITY FILES
+═══════════════════════════════════════════════════════════════════════════════
+
+12. Any file using legacy I2S, DMA, or Wi-Fi APIs:
+    - Search for: i2s_port_t usage (now just int)
+    - Search for: esp_dma_capable_malloc → Replace with heap_caps_malloc
+    - Search for: esp_wifi_set_ant_gpio → Replace with esp_phy_set_ant_gpio
+    - Search for: WIFI_BW_HT20 → Replace with WIFI_BW20
+    Priority: 🟢 MEDIUM (Only if used)
+
+═══════════════════════════════════════════════════════════════════════════════
+
+COMPILATION ISSUES TO WATCH FOR
+═══════════════════════════════════════════════════════════════════════════════
+
+GCC 15.1.0 Warnings (Will fail as errors):
+- Unterminated string initialization: char arr[3] = "foo" (need arr[4])
+- Dangling references: const int& ref = std::max(a, b)
+- Dirent header: Use <dirent.h> not <sys/dirent.h>
+
+Solution: 
+1. Fix the warnings in source code (PREFERRED)
+2. Or disable in sdkconfig:
+   CONFIG_COMPILER_DISABLE_DEFAULT_ERRORS=y
+   CONFIG_COMPILER_DISABLE_GCC15_WARNINGS=y
+
+═══════════════════════════════════════════════════════════════════════════════
+
+TESTING VERIFICATION STEPS
+═══════════════════════════════════════════════════════════════════════════════
+
+After each file modification:
+1. Check for compilation errors
+2. Build the project
+3. Flash to device
+4. Test audio output for that sink
+5. Test sample rate switching
+
+Final validation:
+□ All audio sinks working
+□ No audio dropouts
+□ Sample rate switching works
+□ Wi-Fi connects and stays connected
+□ Spotify API HTTPS works
+□ No console errors or warnings
+
+═══════════════════════════════════════════════════════════════════════════════
+
+QUICK REFERENCE: FILES AND THEIR DEPENDENCIES
+═══════════════════════════════════════════════════════════════════════════════
+
+BufferedAudioSink (Base)
+  └─ Used by all external DAC sinks
+
+InternalAudioSink
+  └─ Independent (built-in DAC)
+
+ES8311AudioSink
+ES8388AudioSink  ─┐
+AC101AudioSink   ├─ All inherit from BufferedAudioSink
+PCM5102AudioSink │
+ES9018AudioSink  │
+SPDIFAudioSink   ┘
+
+Recommendation: Update in this order:
+1. BufferedAudioSink (base class)
+2. InternalAudioSink (simplest)
+3. ExternalDAC sinks (5 files, similar changes)
+
+═══════════════════════════════════════════════════════════════════════════════
+
+DOCUMENTATION REFERENCES
+═══════════════════════════════════════════════════════════════════════════════
+
+For detailed before/after code patterns:
+→ I2S_MIGRATION_CODE_EXAMPLES.md
+
+For priority and overview:
+→ ESP_IDF_V6_QUICK_REFERENCE.md
+
+For comprehensive explanation:
+→ ESP_IDF_V6_MIGRATION_GUIDE.md
+
+For navigation and file organization:
+→ INDEX.md
+
+═══════════════════════════════════════════════════════════════════════════════
+
+ESTIMATED TOTAL TIME
+═══════════════════════════════════════════════════════════════════════════════
+
+I2S driver updates (8 files):         3-4 hours
+Build configuration (2 files):        30 minutes
+Main app infrastructure (1 file):     30 minutes
+GCC warning fixes:                    1-2 hours
+Testing and validation:               2-4 hours
+                                      ─────────
+TOTAL:                                6-11 hours
+
+═══════════════════════════════════════════════════════════════════════════════

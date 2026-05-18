@@ -1,6 +1,8 @@
 #include <MDNSService.h>
 #include <arpa/inet.h>
 #include <mbedtls/aes.h>
+#include <mbedtls/psa_util.h>
+#include <psa/crypto.h>
 #include <stdio.h>
 #include <string.h>
 #include <atomic>
@@ -30,7 +32,6 @@
 #include "CircularBuffer.h"
 
 #include "BellUtils.h"
-#include "ES8311AudioSink.h"
 #include "ESPStatusLed.h"
 #include "Logger.h"
 #include "freertos/ringbuf.h"
@@ -38,6 +39,9 @@
 
 #define DEVICE_NAME CONFIG_CSPOT_DEVICE_NAME
 
+#ifdef CONFIG_CSPOT_SINK_I2S_RAW
+#include <I2SAudioSink.h>
+#endif
 #ifdef CONFIG_CSPOT_SINK_INTERNAL
 #include <InternalAudioSink.h>
 #endif
@@ -46,6 +50,9 @@
 #endif
 #ifdef CONFIG_CSPOT_SINK_ES8388
 #include <ES8388AudioSink.h>
+#endif
+#ifdef CONFIG_CSPOT_SINK_ES8311
+#include <ES8311AudioSink.h>
 #endif
 #ifdef CONFIG_CSPOT_SINK_ES9018
 #include <ES9018AudioSink.h>
@@ -64,49 +71,79 @@ std::string credentialsFileName = "/spiffs/authBlob.json";
 bool createdFromZeroconf = false;
 
 extern "C" {
-void app_main(void);
+  void app_main(void);
 }
 
 class CSpotPlayer : public bell::Task {
- private:
+private:
   std::shared_ptr<cspot::SpircHandler> handler;
-  std::unique_ptr<ES8311AudioSink> audioSink;
+  std::unique_ptr<bell::AudioSink> audioSink;
   std::unique_ptr<bell::CircularBuffer> circularBuffer;
   std::atomic<bool> isPaused;
 
- public:
+public:
   CSpotPlayer(std::shared_ptr<cspot::SpircHandler> handler)
-      : bell::Task("cspot", 8 * 1024, 0, 0) {
+    : bell::Task("cspot", 8 * 1024, 0, 0) {
     this->handler = handler;
+
+    // Select audio sink based on configuration
+#ifdef CONFIG_CSPOT_SINK_I2S_RAW
+    this->audioSink = std::make_unique<I2SAudioSink>();
+    ESP_LOGI(TAG, "Using I2S Audio Sink");
+#elif defined(CONFIG_CSPOT_SINK_INTERNAL)
+    this->audioSink = std::make_unique<InternalAudioSink>();
+    ESP_LOGI(TAG, "Using Internal DAC");
+#elif defined(CONFIG_CSPOT_SINK_AC101)
+    this->audioSink = std::make_unique<AC101AudioSink>();
+    ESP_LOGI(TAG, "Using AC101");
+#elif defined(CONFIG_CSPOT_SINK_ES8388)
+    this->audioSink = std::make_unique<ES8388AudioSink>();
+    ESP_LOGI(TAG, "Using ES8388");
+#elif defined(CONFIG_CSPOT_SINK_ES8311)
     this->audioSink = std::make_unique<ES8311AudioSink>();
+    ESP_LOGI(TAG, "Using ES8311");
+#elif defined(CONFIG_CSPOT_SINK_ES9018)
+    this->audioSink = std::make_unique<ES9018AudioSink>();
+    ESP_LOGI(TAG, "Using ES9018");
+#elif defined(CONFIG_CSPOT_SINK_PCM5102)
+    this->audioSink = std::make_unique<PCM5102AudioSink>();
+    ESP_LOGI(TAG, "Using PCM5102");
+#elif defined(CONFIG_CSPOT_SINK_TAS5711)
+    this->audioSink = std::make_unique<TAS5711AudioSink>();
+    ESP_LOGI(TAG, "Using TAS5711");
+#else
+    this->audioSink = std::make_unique<InternalAudioSink>();
+    ESP_LOGI(TAG, "Using fallback: Internal DAC");
+#endif
+
     this->audioSink->setParams(44100, 2, 16);
     this->audioSink->volumeChanged(160);
 
     this->circularBuffer =
-        std::make_unique<bell::CircularBuffer>(1024 * 128 * 8);
+      std::make_unique<bell::CircularBuffer>(1024 * 128 * 8);
 
     this->handler->getTrackPlayer()->setDataCallback(
-        [this](uint8_t* data, size_t bytes) { this->feedData(data, bytes); });
+      [this](uint8_t* data, size_t bytes) { this->feedData(data, bytes); });
     this->isPaused = false;
 
     this->handler->setEventHandler(
-        [this](std::unique_ptr<cspot::SpircHandler::Event> event) {
-          switch (event->eventType) {
-            case cspot::SpircHandler::EventType::PLAY_PAUSE:
-              this->isPaused = std::get<bool>(event->data);
-              break;
-            case cspot::SpircHandler::EventType::FLUSH:
-              this->circularBuffer->emptyBuffer();
-              break;
-            case cspot::SpircHandler::EventType::SEEK:
-              this->circularBuffer->emptyBuffer();
-              break;
-            case cspot::SpircHandler::EventType::PLAYBACK_START:
-              this->circularBuffer->emptyBuffer();
-            default:
-              break;
-          }
-        });
+      [this](std::unique_ptr<cspot::SpircHandler::Event> event) {
+        switch (event->eventType) {
+        case cspot::SpircHandler::EventType::PLAY_PAUSE:
+          this->isPaused = std::get<bool>(event->data);
+          break;
+        case cspot::SpircHandler::EventType::FLUSH:
+          this->circularBuffer->emptyBuffer();
+          break;
+        case cspot::SpircHandler::EventType::SEEK:
+          this->circularBuffer->emptyBuffer();
+          break;
+        case cspot::SpircHandler::EventType::PLAYBACK_START:
+          this->circularBuffer->emptyBuffer();
+        default:
+          break;
+        }
+      });
     startTask();
   }
 
@@ -115,7 +152,7 @@ class CSpotPlayer : public bell::Task {
 
     while (toWrite > 0) {
       size_t written =
-          this->circularBuffer->write(data + (len - toWrite), toWrite);
+        this->circularBuffer->write(data + (len - toWrite), toWrite);
       if (written == 0) {
         BELL_SLEEP_MS(10);
       }
@@ -135,7 +172,8 @@ class CSpotPlayer : public bell::Task {
         if (read == 0) {
           BELL_SLEEP_MS(100);
         }
-      } else {
+      }
+      else {
         BELL_SLEEP_MS(100);
       }
     }
@@ -143,7 +181,7 @@ class CSpotPlayer : public bell::Task {
 };
 
 class CSpotTask : public bell::Task {
- public:
+public:
   CSpotTask() : bell::Task("cspot", 32 * 1024, 0, 1) { startTask(); }
 
   void runTask() {
@@ -155,40 +193,40 @@ class CSpotTask : public bell::Task {
 
     auto server = std::make_unique<bell::BellHTTPServer>(8080);
     server->registerGet(
-        "/spotify_info", [&server, blob](struct mg_connection* conn) {
-          return server->makeJsonResponse(blob->buildZeroconfInfo());
-        });
+      "/spotify_info", [&server, blob](struct mg_connection* conn) {
+        return server->makeJsonResponse(blob->buildZeroconfInfo());
+      });
     server->registerPost(
-        "/spotify_info", [&server, blob, &gotBlob](struct mg_connection* conn) {
-          nlohmann::json obj;
-          obj["status"] = 101;
-          obj["spotifyError"] = 0;
-          obj["statusString"] = "ERROR-OK";
+      "/spotify_info", [&server, blob, &gotBlob](struct mg_connection* conn) {
+        nlohmann::json obj;
+        obj["status"] = 101;
+        obj["spotifyError"] = 0;
+        obj["statusString"] = "ERROR-OK";
 
-          std::string body = "";
-          auto requestInfo = mg_get_request_info(conn);
-          if (requestInfo->content_length > 0) {
-            body.resize(requestInfo->content_length);
-            mg_read(conn, body.data(), requestInfo->content_length);
+        std::string body = "";
+        auto requestInfo = mg_get_request_info(conn);
+        if (requestInfo->content_length > 0) {
+          body.resize(requestInfo->content_length);
+          mg_read(conn, body.data(), requestInfo->content_length);
 
-            mg_header hd[10];
-            int num = mg_split_form_urlencoded(body.data(), hd, 10);
-            std::map<std::string, std::string> queryMap;
+          mg_header hd[10];
+          int num = mg_split_form_urlencoded(body.data(), hd, 10);
+          std::map<std::string, std::string> queryMap;
 
-            for (int i = 0; i < num; i++) {
-              queryMap[hd[i].name] = hd[i].value;
-            }
-
-            blob->loadZeroconfQuery(queryMap);
-            gotBlob = true;
+          for (int i = 0; i < num; i++) {
+            queryMap[hd[i].name] = hd[i].value;
           }
 
-          return server->makeJsonResponse(obj.dump());
-        });
+          blob->loadZeroconfQuery(queryMap);
+          gotBlob = true;
+        }
+
+        return server->makeJsonResponse(obj.dump());
+      });
 
     bell::MDNSService::registerService(
-        blob->getDeviceName(), "_spotify-connect", "_tcp", "", 8080,
-        {{"VERSION", "1.0"}, {"CPath", "/spotify_info"}, {"Stack", "SP"}});
+      blob->getDeviceName(), "_spotify-connect", "_tcp", "", 8080,
+      { {"VERSION", "1.0"}, {"CPath", "/spotify_info"}, {"Stack", "SP"} });
 
     while (!gotBlob) {
       BELL_SLEEP_MS(1000);
@@ -343,19 +381,21 @@ static void cspotTask(void* pvParameters) {
 }
 
 void init_spiffs() {
-  esp_vfs_spiffs_conf_t conf = {.base_path = "/spiffs",
+  esp_vfs_spiffs_conf_t conf = { .base_path = "/spiffs",
                                 .partition_label = NULL,
                                 .max_files = 5,
-                                .format_if_mount_failed = true};
+                                .format_if_mount_failed = true };
 
   esp_err_t ret = esp_vfs_spiffs_register(&conf);
 
   if (ret != ESP_OK) {
     if (ret == ESP_FAIL) {
       ESP_LOGE(TAG, "Failed to mount or format filesystem");
-    } else if (ret == ESP_ERR_NOT_FOUND) {
+    }
+    else if (ret == ESP_ERR_NOT_FOUND) {
       ESP_LOGE(TAG, "Failed to find SPIFFS partition");
-    } else {
+    }
+    else {
       ESP_LOGE(TAG, "Failed to initialize SPIFFS (%s)", esp_err_to_name(ret));
     }
     return;
@@ -365,19 +405,23 @@ void init_spiffs() {
   ret = esp_spiffs_info(conf.partition_label, &total, &used);
   if (ret != ESP_OK) {
     ESP_LOGE(TAG, "Failed to get SPIFFS partition information (%s)",
-             esp_err_to_name(ret));
-  } else {
+      esp_err_to_name(ret));
+  }
+  else {
     ESP_LOGI(TAG, "Partition size: total: %d, used: %d", total, used);
   }
 }
 
 void app_main(void) {
+  // Initialize PSA Crypto for mbedTLS v4.0 (ESP-IDF v6.0 requirement)
+  psa_crypto_init();
+
   // statusLed = std::make_shared<ESPStatusLed>();
   // statusLed->setStatus(StatusLed::IDLE);
 
   esp_err_t ret = nvs_flash_init();
   if (ret == ESP_ERR_NVS_NO_FREE_PAGES ||
-      ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+    ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
     ESP_ERROR_CHECK(nvs_flash_erase());
     ret = nvs_flash_init();
   }

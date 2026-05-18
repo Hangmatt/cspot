@@ -120,6 +120,13 @@ See running the CLI for information on how to run cspot on a desktop computer.
 
 The ESP32 target is built using the [esp-idf](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/get-started/index.html) toolchain
 
+This branch contains an ESP-IDF v6.0 build setup aimed at the Lolin D32 Pro
+ESP32 board with 16MB flash and 8MB PSRAM. The default ESP32 sink is now a raw
+32-bit I2S output path using the modern ESP-IDF channel-based I2S driver, with
+default pins BCK GPIO 26, LRCK GPIO 25, and DATA GPIO 13. The detailed migration
+notes live in [`MODERNIZATION_README.md`](MODERNIZATION_README.md), with the
+pre-build sanity checks in [`PRE_BUILD_CHECKLIST.md`](PRE_BUILD_CHECKLIST.md).
+
 ```shell
 # Follow the instructions for setting up esp-idf for your operating system, up to `. ./export.sh` or equivalent
 # esp-idf has a Python virtualenv, install nanopb's dependencies in it

@@ -8,16 +8,20 @@ menu "CSPOT Configuration"
 
     choice CSPOT_SINK
         prompt "Sink Device"
-        default CSPOT_SINK_AC101
+        default CSPOT_SINK_I2S_RAW
         help
             Select audio sink device
         
+        config CSPOT_SINK_I2S_RAW
+            bool "Raw I2S (Generic I2S Audio Output - 32-bit)"
         config CSPOT_SINK_INTERNAL
             bool "Built-in DAC"
         config CSPOT_SINK_AC101
             bool "AC101"
         config CSPOT_SINK_ES8388
             bool "ES8388"
+        config CSPOT_SINK_ES8311
+            bool "ES8311"
         config CSPOT_SINK_ES9018
             bool "ES8018"
         config CSPOT_SINK_PCM5102
@@ -25,6 +29,30 @@ menu "CSPOT Configuration"
         config CSPOT_SINK_TAS5711
             bool "TAS5711"
     endchoice
+
+    config CSPOT_I2S_BCK_PIN
+        depends on CSPOT_SINK_I2S_RAW
+        int "I2S BCK (Bit Clock) GPIO"
+        range 0 48
+        default 26
+        help
+            GPIO pin number for I2S Bit Clock (BCK).
+
+    config CSPOT_I2S_LRCK_PIN
+        depends on CSPOT_SINK_I2S_RAW
+        int "I2S LRCK (Word Select) GPIO"
+        range 0 48
+        default 25
+        help
+            GPIO pin number for I2S Left/Right Clock (LRCK/WS).
+
+    config CSPOT_I2S_DATA_PIN
+        depends on CSPOT_SINK_I2S_RAW
+        int "I2S DATA (DIN) GPIO"
+        range 0 48
+        default 13
+        help
+            GPIO pin number for I2S Data input (DIN).
 
     choice CSPOT_QUALITY
         prompt "Audio Quality (BPS)"
